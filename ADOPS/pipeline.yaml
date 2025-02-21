@@ -1,0 +1,49 @@
+pipeline:
+  name: Hotel Logging Deployment
+  trigger:
+    on: push
+    branches:
+      - main
+
+  jobs:
+    - name: Build & Push Docker Images
+      steps:
+        - name: Login to Docker Hub
+          command: docker login -u $DOCKERHUB_USER -p $DOCKERHUB_PASS
+
+        - name: Build & Push Webserver Image
+          command: |
+            docker build -t hotel/hotel-logging-server:latest -f docker/webserver.Dockerfile .
+            docker push hotel/hotel-logging-server:latest
+
+        - name: Build & Push Fluent Bit Sidecar
+          command: |
+            docker build -t hotel/fluent-custom-logger:latest -f docker/fluentbit.Dockerfile .
+            docker push hotel/fluent-custom-logger:latest
+            
+    - name: Deploy to Kubernetes
+      steps:
+        - name: Set Kubeconfig Context
+          command: |
+            export KUBECONFIG=$(pwd)/k8s-manifests/kubeconfig.yaml
+            echo "KUBECONFIG set to $(pwd)/k8s-manifests/kubeconfig.yaml"
+
+        - name: Apply Secrets
+          command: kubectl apply -f k8s-manifests/secret.yaml -n hotel
+
+        - name: Apply ConfigMap
+          command: kubectl apply -f k8s-manifests/configmap.yaml -n hotel
+
+        - name: Deploy Hotel Logging App
+          command: kubectl apply -f k8s-manifests/deployment.yaml -n hotel
+
+        - name: Apply Service (Optional)
+          command: kubectl apply -f k8s-manifests/service.yaml -n hotel
+
+    - name: Verify Deployment
+      steps:
+        - name: Wait for Pods to be Ready
+          command: kubectl rollout status deployment/hotel-logging -n hotel
+
+        - name: Check Logs
+          command: kubectl logs -l app=hotel-logging -n hotel --tail=20
