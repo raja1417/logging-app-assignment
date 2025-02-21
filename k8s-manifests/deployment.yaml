@@ -19,7 +19,7 @@ spec:
       restartPolicy: Always
       containers:
         - name: hotel-logging-server
-          image: httpd-custom-hotel-logging:latest
+          image: docker.io/hotel/httpd-custom-hotel-logging:latest
           ports:
             - containerPort: 80
           volumeMounts:
@@ -39,7 +39,7 @@ spec:
             periodSeconds: 10
 
         - name: fluent-bit-logger
-          image: fluent-custom-logger:latest
+          image: docker.io/hotel/fluent-custom-logger:latest
           env:
             - name: SPLUNK_TOKEN
               valueFrom:
@@ -51,7 +51,7 @@ spec:
               mountPath: /fluent-bit/etc/
               subPath: fluent-bit.conf
             - name: fluent-bit-config
-              mountPath: /fluent-bit/etc/parsers.conf
+              mountPath: /fluent-bit/etc/
               subPath: parsers.conf
             - name: logs
               mountPath: /usr/local/apache2/logs
