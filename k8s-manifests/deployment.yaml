@@ -15,6 +15,8 @@ spec:
       labels:
         app: hotel-logging
     spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Always
       containers:
         - name: hotel-logging-server
           image: httpd-custom-hotel-logging:latest
@@ -23,6 +25,18 @@ spec:
           volumeMounts:
             - name: logs
               mountPath: /usr/local/apache2/logs
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
 
         - name: fluent-bit-logger
           image: fluent-custom-logger:latest
@@ -35,8 +49,22 @@ spec:
           volumeMounts:
             - name: fluent-bit-config
               mountPath: /fluent-bit/etc/
+              subPath: fluent-bit.conf
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/parsers.conf
+              subPath: parsers.conf
             - name: logs
               mountPath: /usr/local/apache2/logs
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep fluent-bit"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep fluent-bit"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
 
       volumes:
         - name: fluent-bit-config
@@ -44,3 +72,4 @@ spec:
             name: fluent-bit-config
         - name: logs
           emptyDir: {}
+
