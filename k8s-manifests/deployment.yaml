@@ -4,6 +4,7 @@ metadata:
   name: hotel-logging
   labels:
     app: hotel-logging
+  namespace: hotel
 spec:
   replicas: 3
   selector:
