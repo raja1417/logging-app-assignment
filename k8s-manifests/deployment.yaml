@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hotel-logging
+  labels:
+    app: hotel-logging
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hotel-logging
+  template:
+    metadata:
+      labels:
+        app: hotel-logging
+    spec:
+      containers:
+        - name: hotel-logging-server
+          image: httpd-custom-hotel-logging:latest
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: logs
+              mountPath: /usr/local/apache2/logs
+
+        - name: fluent-bit-logger
+          image: fluent-custom-logger:latest
+          env:
+            - name: SPLUNK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: splunk-secret
+                  key: SPLUNK_TOKEN
+          volumeMounts:
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/
+            - name: logs
+              mountPath: /usr/local/apache2/logs
+
+      volumes:
+        - name: fluent-bit-config
+          configMap:
+            name: fluent-bit-config
+        - name: logs
+          emptyDir: {}
