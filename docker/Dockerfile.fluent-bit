@@ -2,7 +2,7 @@ FROM fluent/fluent-bit:latest
 WORKDIR /fluent-bit/
 COPY fluent-bit.conf /fluent-bit/etc/fluent-bit.conf
 COPY parsers.conf /fluent-bit/etc/parsers.conf
-RUN chmod +x /fluent-bit/etc/*
+RUN chown fluent:fluent /fluent-bit/etc/*.conf
 USER fluent
 ENV FLUENT_BIT_CONFIG="/fluent-bit/etc/fluent-bit.conf"
 CMD ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf"]
