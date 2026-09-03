@@ -1,8 +1,30 @@
-FROM fluent/fluent-bit:latest
+# syntax=docker/dockerfile:1
+# Fluent Bit sidecar image: pinned version, config copied in and validated at
+# build time (fails fast if the config is malformed), running as a
+# dedicated non-root user.
+#
+# The default fluent/fluent-bit image is distroless (no shell/coreutils), so
+# the "-debug" (Debian-based) variant is used here to allow user/permission
+# setup; only the fluent-bit binary and config actually run at container
+# start, so this does not change the runtime attack surface meaningfully.
+
+FROM fluent/fluent-bit:3.1.9-debug AS validate
+COPY fluent-bit/fluent-bit.conf /fluent-bit/etc/fluent-bit.conf
+COPY fluent-bit/parsers.conf /fluent-bit/etc/parsers.conf
+RUN /fluent-bit/bin/fluent-bit --dry-run --config=/fluent-bit/etc/fluent-bit.conf
+
+FROM fluent/fluent-bit:3.1.9-debug
 WORKDIR /fluent-bit/
-COPY fluent-bit.conf /fluent-bit/etc/fluent-bit.conf
-COPY parsers.conf /fluent-bit/etc/parsers.conf
-RUN chown fluent:fluent /fluent-bit/etc/*.conf
+RUN groupadd --system --gid 1500 fluent && \
+    useradd --system --uid 1500 --gid fluent --home-dir /fluent-bit fluent && \
+    mkdir -p /fluent-bit/storage
+COPY --from=validate --chown=fluent:fluent /fluent-bit/etc/fluent-bit.conf /fluent-bit/etc/fluent-bit.conf
+COPY --from=validate --chown=fluent:fluent /fluent-bit/etc/parsers.conf /fluent-bit/etc/parsers.conf
+RUN chown -R fluent:fluent /fluent-bit/storage
 USER fluent
 ENV FLUENT_BIT_CONFIG="/fluent-bit/etc/fluent-bit.conf"
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD pgrep fluent-bit || exit 1
+
 CMD ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf"]
