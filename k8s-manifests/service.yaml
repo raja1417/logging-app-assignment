@@ -3,13 +3,14 @@ kind: Service
 metadata:
   name: hotel-logging-service
   namespace: hotel
+  labels:
+    app: hotel-logging
 spec:
   selector:
     app: hotel-logging
   ports:
     - name: http
       protocol: TCP
-      port: 80        
-      targetPort: 80  
-      nodePort: 30080 
-  type: NodePort
+      port: 80
+      targetPort: http
+  type: ClusterIP
