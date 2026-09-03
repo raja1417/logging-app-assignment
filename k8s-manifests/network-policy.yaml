@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hotel-logging
+  namespace: hotel
+spec:
+  podSelector:
+    matchLabels:
+      app: hotel-logging
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Splunk HEC
+    - ports:
+        - protocol: TCP
+          port: 8088
+    # Kubernetes API (metadata lookups, if enabled)
+    - ports:
+        - protocol: TCP
+          port: 443

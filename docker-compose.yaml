@@ -1,0 +1,81 @@
+# Local development stack for the hotel-booking logging solution:
+#   app          -> Node.js/Express hotel-booking API (structured JSON logs)
+#   fluent-bit   -> tails the app's log file, filters/throttles it, forwards
+#                   to the Splunk HEC mock (and to stdout for convenience)
+#   splunk-hec   -> a minimal HTTP Event Collector mock so `docker compose up`
+#                   works without a real Splunk license/instance
+#   prometheus   -> scrapes /metrics from the app
+#   grafana      -> pre-provisioned Prometheus datasource for dashboards
+#
+# Usage: docker compose up --build
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webserver
+    ports:
+      - "8080:8080"
+    environment:
+      LOG_LEVEL: info
+      LOG_SAMPLE_RATE: "0.5"
+      LOG_MAX_PER_WINDOW: "50"
+      LOG_WINDOW_MS: "1000"
+      PORT: "8080"
+      LOG_FILE: /var/log/app/app.log
+    volumes:
+      - app-logs:/var/log/app
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  fluent-bit:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fluent-bit
+    depends_on:
+      - app
+      - splunk-hec
+    environment:
+      SPLUNK_HEC_HOST: splunk-hec
+      SPLUNK_HEC_PORT: "8088"
+      SPLUNK_HEC_TLS: "Off"
+      SPLUNK_TOKEN: "local-dev-token"
+      POD_NAME: "local-dev"
+      POD_NAMESPACE: "default"
+      NODE_NAME: "local-node"
+    volumes:
+      - app-logs:/var/log/app:ro
+    ports:
+      - "2020:2020"
+
+  splunk-hec:
+    image: mendhak/http-https-echo:31
+    environment:
+      HTTP_PORT: "8088"
+    ports:
+      - "8088:8088"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    depends_on:
+      - prometheus
+
+volumes:
+  app-logs:

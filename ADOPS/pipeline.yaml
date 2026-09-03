@@ -1,49 +1,145 @@
-pipeline:
-  name: Hotel Logging Deployment
-  trigger:
-    on: push
-    branches:
+# Azure DevOps pipeline for the Hotel Booking logging-app.
+# Build -> Test -> Scan -> Push -> Deploy, driven by shared variables so
+# image tags/registry/namespace only need to change in one place.
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - app/**
+      - docker/**
+      - fluent-bit/**
+      - k8s-manifests/**
+      - charts/**
+      - ADOPS/**
+
+pr:
+  branches:
+    include:
       - main
 
-  jobs:
-    - name: Build & Push Docker Images
-      steps:
-        - name: Login to Docker Hub
-          command: docker login -u $DOCKERHUB_USER -p $DOCKERHUB_PASS
+variables:
+  imageRegistry: 'hotel'
+  webserverImage: '$(imageRegistry)/hotel-logging-server'
+  fluentBitImage: '$(imageRegistry)/fluent-custom-logger'
+  imageTag: '$(Build.SourceVersion)'
+  k8sNamespace: 'hotel'
+  vmImage: 'ubuntu-latest'
 
-        - name: Build & Push Webserver Image
-          command: |
-            docker build -t hotel/hotel-logging-server:latest -f docker/webserver.Dockerfile .
-            docker push hotel/hotel-logging-server:latest
+stages:
+  - stage: Build
+    displayName: 'Build & Unit Test'
+    jobs:
+      - job: AppBuildTest
+        displayName: 'Install, lint, test, build Node app'
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Use Node.js 20'
+          - script: npm ci
+            workingDirectory: app
+            displayName: 'npm ci'
+          - script: npm run lint
+            workingDirectory: app
+            displayName: 'npm run lint'
+          - script: npm test
+            workingDirectory: app
+            displayName: 'npm test'
+          - script: npm run build
+            workingDirectory: app
+            displayName: 'npm run build'
 
-        - name: Build & Push Fluent Bit Sidecar
-          command: |
-            docker build -t hotel/fluent-custom-logger:latest -f docker/fluentbit.Dockerfile .
-            docker push hotel/fluent-custom-logger:latest
-            
-    - name: Deploy to Kubernetes
-      steps:
-        - name: Set Kubeconfig Context
-          command: |
-            export KUBECONFIG=$(pwd)/k8s-manifests/kubeconfig.yaml
-            echo "KUBECONFIG set to $(pwd)/k8s-manifests/kubeconfig.yaml"
+  - stage: Scan
+    displayName: 'Static & Manifest Validation'
+    dependsOn: Build
+    jobs:
+      - job: ManifestValidation
+        displayName: 'helm lint & kubeconform'
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - script: |
+              curl -fsSL -o helm.tar.gz https://get.helm.sh/helm-v3.14.4-linux-amd64.tar.gz
+              tar -zxvf helm.tar.gz
+              sudo mv linux-amd64/helm /usr/local/bin/helm
+              helm lint charts/logging-app
+            displayName: 'helm lint'
+          - script: |
+              curl -fsSL -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+              tar -zxvf kubeconform.tar.gz kubeconform
+              sudo mv kubeconform /usr/local/bin/kubeconform
+              kubeconform -strict -summary k8s-manifests/*.yaml
+            displayName: 'kubeconform validate k8s-manifests'
 
-        - name: Apply Secrets
-          command: kubectl apply -f k8s-manifests/secret.yaml -n hotel
+  - stage: Push
+    displayName: 'Build & Push Docker Images'
+    dependsOn: Scan
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: BuildPushImages
+        displayName: 'Build, scan and push images'
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - task: Docker@2
+            displayName: 'Login to Docker Hub'
+            inputs:
+              command: login
+              containerRegistry: 'dockerHubServiceConnection'
 
-        - name: Apply ConfigMap
-          command: kubectl apply -f k8s-manifests/configmap.yaml -n hotel
+          - script: |
+              docker build -t $(webserverImage):$(imageTag) -t $(webserverImage):latest -f docker/Dockerfile.webserver .
+            displayName: 'Build webserver image'
 
-        - name: Deploy Hotel Logging App
-          command: kubectl apply -f k8s-manifests/deployment.yaml -n hotel
+          - script: |
+              docker build -t $(fluentBitImage):$(imageTag) -t $(fluentBitImage):latest -f docker/Dockerfile.fluent-bit .
+            displayName: 'Build fluent-bit sidecar image'
 
-        - name: Apply Service (Optional)
-          command: kubectl apply -f k8s-manifests/service.yaml -n hotel
+          - script: |
+              curl -fsSL -o trivy.tar.gz https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.tar.gz
+              tar -zxvf trivy.tar.gz trivy
+              ./trivy image --exit-code 0 --severity HIGH,CRITICAL $(webserverImage):$(imageTag)
+              ./trivy image --exit-code 0 --severity HIGH,CRITICAL $(fluentBitImage):$(imageTag)
+            displayName: 'Trivy vulnerability scan'
 
-    - name: Verify Deployment
-      steps:
-        - name: Wait for Pods to be Ready
-          command: kubectl rollout status deployment/hotel-logging -n hotel
+          - script: |
+              docker push $(webserverImage):$(imageTag)
+              docker push $(webserverImage):latest
+              docker push $(fluentBitImage):$(imageTag)
+              docker push $(fluentBitImage):latest
+            displayName: 'Push images'
 
-        - name: Check Logs
-          command: kubectl logs -l app=hotel-logging -n hotel --tail=20
+  - stage: Deploy
+    displayName: 'Deploy to Kubernetes'
+    dependsOn: Push
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployHotelLoggingApp
+        displayName: 'helm upgrade --install'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    curl -fsSL -o helm.tar.gz https://get.helm.sh/helm-v3.14.4-linux-amd64.tar.gz
+                    tar -zxvf helm.tar.gz
+                    sudo mv linux-amd64/helm /usr/local/bin/helm
+                    helm upgrade --install hotel-logging charts/logging-app \
+                      --namespace $(k8sNamespace) --create-namespace \
+                      --set image.repository=$(webserverImage) \
+                      --set image.tag=$(imageTag) \
+                      --set fluentBit.image.repository=$(fluentBitImage) \
+                      --set fluentBit.image.tag=$(imageTag) \
+                      --set splunk.token=$(SPLUNK_TOKEN)
+                  displayName: 'helm upgrade --install'
+                - script: kubectl rollout status deployment/hotel-logging -n $(k8sNamespace) --timeout=180s
+                  displayName: 'Wait for rollout'
+                - script: kubectl logs -l app=hotel-logging -n $(k8sNamespace) --tail=20
+                  displayName: 'Show recent logs'

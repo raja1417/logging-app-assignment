@@ -1,77 +1,162 @@
-# logging-app-assignment
+# Hotel Booking Logging App
 
-Issue: Online Hotel booking System is having performance issue . Issue was identified due to huge logging being done by system which is resulting in high resource utilization hampering the performance.
+A hotel-booking API and logging pipeline used to demonstrate how to keep a
+high-traffic web application observable **without** the huge log volume that
+originally caused the performance issue described below.
 
-solution: containerize the application with docker and orchestrate the container using kubernetes for high availability and proper scaling.
+> **Original issue:** *"Online Hotel booking System is having performance
+> issue. Issue was identified due to huge logging being done by system which
+> is resulting in high resource utilization hampering the performance."*
+>
+> **Solution:** containerize the application (Node.js/Express API + Fluent
+> Bit sidecar), keep logs structured and sampled at the source, forward a
+> reduced, high-value stream to Splunk, and orchestrate everything on
+> Kubernetes for scaling/availability.
 
-Tech stack used:
-1. GIT- SCM
-2. Docker
-3. kubernetes
-4. Splunk
-5. Azure DevOps pipelines (ADOPS) for CI/CD
+## Architecture
 
-Steps:
+```mermaid
+flowchart LR
+    subgraph Pod["Kubernetes Pod (Deployment)"]
+        App["hotel-logging-server\n(Node.js/Express + pino)"]
+        FB["fluent-bit-logger\n(sidecar)"]
+        App -- "writes JSON logs\n(shared emptyDir volume)" --> FB
+    end
 
-1. for this usecase, we can have 2 docker containers. one as a webserver with src details and another sidecar container that runs alonside the main webserver container collecting it's logs and forwarding to splunk where they can be parsed as we need.
-2. for the webserver, we can use the official httpd docker image with steps as shown below.
+    Client(["Browser / API client"]) -->|HTTP| Svc["Service"]
+    Svc --> App
+    FB -->|"HEC (throttled, filtered)"| Splunk[("Splunk")]
+    FB -->|stdout| KubeLogs[["kubectl logs / docker logs"]]
+    App -->|"/metrics"| Prom["Prometheus"]
+    Prom --> Grafana["Grafana"]
+```
 
-FROM httpd:latest                       # gets the latest httpd image from docker hub --> ref: https://hub.docker.com/_/httpd
-WORKDIR /usr/local/apache2/htdocs/      # Set working directory
-COPY src/index.html .                   # Copy index.html (didnt write any index.html scripts. just imagining it's there for UI purposes)
-RUN mkdir -p /usr/local/apache2/logs/   # Create logs directory with correct permissions
-RUN chmod -R 755 /usr/local/apache2/logs/
-EXPOSE 80                                  #Expose HTTP port
-CMD ["httpd", "-D", "FOREGROUND"]          # Start Apache in foreground
+- **hotel-logging-server** — Express + TypeScript API, structured JSON logs
+  (pino), request-id correlation, log sampling/rate-limiting, Prometheus
+  metrics.
+- **fluent-bit-logger** — sidecar that tails the app's JSON log file,
+  enriches, filters (drops `DEBUG`), throttles, and forwards to Splunk HEC
+  and stdout.
+- **Splunk** — indexes/searches the reduced log stream.
+- **Prometheus/Grafana** — scrape `/metrics` for request rate, latency and
+  log-volume counters.
 
-3. For the sidecar, we can use the lightweight fluent-bit log processor which can run alonside the web container and get the logs , push it to a path where the splunk can read and process.
+## Repository layout
 
-FROM fluent/fluent-bit:latest      # gets the official fluent-bit image from docker-hub-->/hub.docker.com/r/fluent/fluent-bit
-WORKDIR /fluent-bit/
-COPY fluent-bit.conf /fluent-bit/etc/fluent-bit.conf  # Copy configuration files
-COPY parsers.conf /fluent-bit/etc/parsers.conf        
-RUN chown fluent:fluent /fluent-bit/etc/*.conf        # ensures right ownership
-USER fluent                                           # Switch to non-root user
-ENV FLUENT_BIT_CONFIG="/fluent-bit/etc/fluent-bit.conf" # Set Fluent Bit config environment variable. we can either set this here or in the kubernetes manifests. 
-CMD ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf"] # starts the fluent-bit log processor.
+| Path | Purpose |
+|------|---------|
+| `app/` | Node.js/TypeScript Express hotel-booking API, tests, load generator, static frontend |
+| `docker/` | Multi-stage Dockerfiles for the webserver and Fluent Bit sidecar |
+| `fluent-bit/` | Fluent Bit `fluent-bit.conf` / `parsers.conf` used by the Docker image and Kubernetes ConfigMap |
+| `k8s-manifests/` | Plain Kubernetes manifests (Deployment, Service, ConfigMap, Secret, HPA, PDB, NetworkPolicy, Ingress, ServiceAccount) |
+| `charts/logging-app/` | Helm chart wrapping the manifests above |
+| `ADOPS/pipeline.yaml` | Azure DevOps pipeline (Build → Scan → Push → Deploy) |
+| `.github/workflows/ci.yml` | GitHub Actions CI (lint/test/build, Docker build, Trivy scan, helm lint/kubeconform) |
+| `docs/` | Architecture, runbook and logging-strategy docs |
 
-4. For fluent-bit to work properly and get the logs from different paths, we need to have a fluent-bit.conf and parser.conf files which we can get from , ref: https://github.com/fluent/fluent-bit/blob/master/conf/fluent-bit.conf. they are mentioned in the config map.
-5. once we have the docker files in place, we can build them using the docker commands that are mentioned later in the pipeline script.
+## Quickstart (Docker Compose)
 
-Kubernetes manifests:
+```bash
+cd app && npm ci && npm test && npm run build && cd ..
+docker compose up --build
+```
 
-1. Once the docker images are built and pushed to the registries, we can focus on deploying them to kubernetes.
-2. in kubernetes side, let's imagine we are using any cloud based clusters. and we login through kubeconfig.yaml.
-3. we need deployment manifests, service manifest, config-map and secret manifest.
-4. For this assignment, all the manifests templates are referred from the following public sites:
-https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
-https://kubernetes.io/docs/concepts/configuration/configmap/
-https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/
-https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/
-https://kubernetes.io/docs/concepts/configuration/secret/
-https://kubernetes.io/docs/tasks/configure-pod-container/configure-volume-storage/
+This starts:
 
-5. We could have used helm charts for easing these deployments in a single shot but due to time constraints I had to rely on manual yaml creation and deployment. Refer to the repo path k8s-manifests/ for manifest files.
-6. deployment manifest has 3 replicas defined, 2 containers - 1 main and 1 sidecar, volume mounts , secret reference parameter and configMap parameter. The strategy is rolling update to minimise downtime.
-7. configmap has fluent-bit config file that has instuctions for fleunt-bit to get it's logs from the web application. The Fluent Bit sidecar collects logs from the web server and processes them using custom parsers. Logs are forwarded to Splunk, where they can be indexed, searched, and analyzed for system performance insights. This setup ensures efficient log management without overwhelming the application.
-8. secret manifest has the splunk secret and service of type Nodeport, allocates a static port to the pod and exposes the pod IP via that port for external access.
+- `app` — the API on http://localhost:8080 (`/healthz`, `/readyz`, `/metrics`, `/api/hotels`, static UI at `/`)
+- `fluent-bit` — tails the app's logs and forwards them to the mock Splunk HEC endpoint and stdout
+- `splunk-hec` — an HTTP echo mock standing in for Splunk HEC (`docker compose logs splunk-hec` shows received events)
+- `prometheus` — scrapes `app:8080/metrics` (http://localhost:9090)
+- `grafana` — http://localhost:3000 (default admin/admin)
 
-CI/CD pipeline: Ref: https://learn.microsoft.com/en-us/azure/devops/pipelines/ecosystems/kubernetes/deploy?view=azure-devops
+Generate load to see sampling/throttling in action:
 
-I have used Azure devops for the CI/CD pipeline automation. The builds, pushes, and deploys containers to Kubernetes. It has step by step instruction of the commands to perform in each stage right from building the docker image, pushing the docker image to registry, logging into k8s, initiating the deployments. This approach enhances reliability, reduces manual effort, and enables faster issue resolution.
+```bash
+cd app && npm run loadgen -- --rps 50 --duration 30
+```
 
-result:
+## Kubernetes / Helm
 
-Fluent Bit collects logs from /usr/local/apache2/logs/access.log, extracts fields using parsers.conf, and sends them to Splunk via HTTP Event Collector (HEC). Splunk receives logs, processes them with the assigned sourcetype (fluentbit_logs), and stores them in an index for querying. Splunk query extracts words, counts occurrences, and formats the output as per the user requirement.
+```bash
+helm lint charts/logging-app
+helm upgrade --install hotel-logging charts/logging-app \
+  --namespace hotel --create-namespace \
+  --set splunk.token=<your-hec-token> \
+  --set splunk.hecHost=<splunk-host>
+kubectl -n hotel get pods,svc,hpa,pdb
+```
 
-example assumption of splunk log output for our usecase:
+Plain manifests (no Helm) are still available under `k8s-manifests/` and can
+be applied directly with `kubectl apply -f k8s-manifests/`.
 
+## Configuration
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|--------------|
+| `PORT` | app | `8080` | HTTP listen port |
+| `LOG_LEVEL` | app | `info` | pino log level (`debug`, `info`, `warn`, `error`) |
+| `LOG_FILE` | app | unset | If set, tee JSON logs to this file for Fluent Bit to tail |
+| `LOG_SAMPLE_RATE` | app | `0.1` | Fraction (0-1) of high-volume route logs kept |
+| `LOG_MAX_PER_WINDOW` | app | `20` | Max sampled logs per route per window |
+| `LOG_WINDOW_MS` | app | `1000` | Sampling window size (ms) |
+| `REQUEST_TIMEOUT_MS` | app | `5000` | Per-request timeout |
+| `SPLUNK_HEC_HOST` / `SPLUNK_HEC_PORT` / `SPLUNK_HEC_TLS` | fluent-bit | — | Splunk HEC endpoint |
+| `SPLUNK_TOKEN` | fluent-bit | — | Splunk HEC token (from Secret) |
+| Helm `fluentBit.throttle.rate` / `.window` | fluent-bit | `100` / `60` | Throttle filter rate limiting |
+
+## Reducing log volume (the original problem)
+
+The original incident was caused by excessive logging under load. This repo
+addresses it at multiple layers:
+
+1. **App-level sampling** (`app/src/lib/sampler.ts`) — high-volume routes
+   (`/healthz`, `/readyz`, `/metrics`) are logged at a configurable sample
+   rate and capped per time window, instead of on every request.
+2. **Structured, leveled logging** (pino) — `LOG_LEVEL` controls verbosity;
+   `DEBUG` logs are never emitted in production configurations.
+3. **Redaction** — secrets/PII fields are redacted before serialization so
+   payloads stay small and safe to forward.
+4. **Fluent Bit filtering & throttling** — the sidecar's `grep` filter drops
+   remaining `DEBUG` records and a `throttle` filter caps the events/sec
+   forwarded to Splunk, protecting both the node and the Splunk HEC ingest
+   pipeline.
+5. **Buffered, retried delivery** — `storage.type filesystem` buffering with
+   bounded `mem_buf_limit`/retry limits prevents unbounded memory growth if
+   Splunk is briefly unavailable.
+6. **Prometheus log-volume counter** — `/metrics` exposes a counter of logs
+   emitted per level/route so volume regressions are visible before they
+   become an incident.
+
+## Splunk query examples
+
+Word-frequency example (kept from the original assignment):
+
+```
 index="hotel_logs" sourcetype="fluentbit_logs" | rex field=_raw "(?<words>\w+)" max_match=100 | mvexpand words | stats count by words | sort - count
+```
 
-INFO – 3 times
-message – 3 times
-is – 2 times
-the – 2 times
-This – 1 time
-Goa – 1 time
-best – 1 time
+Request latency / error-rate example using the structured fields emitted by
+this app (`ts`, `level`, `request_id`, `route`, `status`, `latency_ms`):
+
+```
+index="hotel_logs" sourcetype="fluentbit_logs"
+| spath
+| stats avg(latency_ms) as avg_latency_ms, p95(latency_ms) as p95_latency_ms, count by route status
+| sort - p95_latency_ms
+```
+
+## CI/CD
+
+- `ADOPS/pipeline.yaml` — Azure DevOps pipeline: Build (lint/test/build) →
+  Scan (helm lint/kubeconform) → Push (Docker build + Trivy) → Deploy
+  (`helm upgrade --install`).
+- `.github/workflows/ci.yml` — GitHub Actions equivalent for lint/test/build,
+  Docker Buildx build + Trivy scan, and `helm lint`/`kubeconform` manifest
+  validation.
+
+## Further reading
+
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/logging-strategy.md`](docs/logging-strategy.md)
+- [`docs/runbook.md`](docs/runbook.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)

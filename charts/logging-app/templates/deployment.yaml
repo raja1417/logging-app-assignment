@@ -1,28 +1,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hotel-logging
+  name: {{ include "logging-app.fullname" . }}
+  namespace: {{ .Values.namespace }}
   labels:
-    app: hotel-logging
-  namespace: hotel
+    {{- include "logging-app.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
       maxSurge: 1
-  replicas: 3
   selector:
     matchLabels:
-      app: hotel-logging
+      {{- include "logging-app.labels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: hotel-logging
+        {{- include "logging-app.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: hotel-logging
+      serviceAccountName: {{ include "logging-app.serviceAccountName" . }}
       terminationGracePeriodSeconds: 30
-      restartPolicy: Always
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -33,7 +34,7 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app: hotel-logging
+              {{- include "logging-app.labels" . | nindent 14 }}
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -42,34 +43,29 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels:
-                    app: hotel-logging
+                    {{- include "logging-app.labels" . | nindent 20 }}
       containers:
         - name: hotel-logging-server
-          image: docker.io/hotel/hotel-logging-server:latest
-          imagePullPolicy: IfNotPresent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.app.port }}
           env:
             - name: PORT
-              value: "8080"
+              value: {{ .Values.app.port | quote }}
             - name: LOG_LEVEL
-              value: "info"
+              value: {{ .Values.app.logLevel | quote }}
             - name: LOG_FILE
               value: "/var/log/app/app.log"
             - name: LOG_SAMPLE_RATE
-              value: "0.5"
+              value: {{ .Values.app.logSampleRate | quote }}
             - name: LOG_MAX_PER_WINDOW
-              value: "50"
+              value: {{ .Values.app.logMaxPerWindow | quote }}
             - name: LOG_WINDOW_MS
-              value: "1000"
+              value: {{ .Values.app.logWindowMs | quote }}
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 256Mi
+            {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -100,8 +96,8 @@ spec:
             periodSeconds: 10
 
         - name: fluent-bit-logger
-          image: docker.io/hotel/fluent-custom-logger:latest
-          imagePullPolicy: IfNotPresent
+          image: "{{ .Values.fluentBit.image.repository }}:{{ .Values.fluentBit.image.tag }}"
+          imagePullPolicy: {{ .Values.fluentBit.image.pullPolicy }}
           env:
             - name: SPLUNK_TOKEN
               valueFrom:
@@ -136,12 +132,7 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
+            {{- toYaml .Values.fluentBit.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

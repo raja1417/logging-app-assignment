@@ -1,0 +1,13 @@
+apiVersion: v2
+name: logging-app
+description: Hotel-booking API with an Apache-style log pipeline (Fluent Bit sidecar -> Splunk HEC), demonstrating reduced-volume structured logging.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - logging
+  - fluent-bit
+  - splunk
+  - hotel-booking
+maintainers:
+  - name: raja1417

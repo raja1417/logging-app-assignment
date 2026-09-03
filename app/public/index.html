@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hotel Booking</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>🏨 Hotel Booking</h1>
+    <p>Book a stay and watch structured logs stream in real time.</p>
+  </header>
+
+  <main>
+    <section id="hotels-section">
+      <h2>Available Hotels</h2>
+      <div id="hotels-list" class="grid"></div>
+    </section>
+
+    <section id="booking-section">
+      <h2>Book a Room</h2>
+      <form id="booking-form">
+        <label>Hotel
+          <select id="hotelId" required></select>
+        </label>
+        <label>Guest Name
+          <input id="guestName" type="text" required maxlength="200" />
+        </label>
+        <label>Check-in
+          <input id="checkIn" type="date" required />
+        </label>
+        <label>Check-out
+          <input id="checkOut" type="date" required />
+        </label>
+        <label>Guests
+          <input id="guests" type="number" min="1" max="20" value="1" required />
+        </label>
+        <button type="submit">Book Now</button>
+      </form>
+      <div id="booking-result"></div>
+    </section>
+
+    <section id="logs-section">
+      <h2>Client-side Log</h2>
+      <ul id="log-list"></ul>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

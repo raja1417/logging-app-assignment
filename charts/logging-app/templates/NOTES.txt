@@ -1,0 +1,8 @@
+Hotel Booking logging-app has been deployed.
+
+Check status:
+  kubectl -n {{ .Values.namespace }} get pods,svc,hpa,pdb
+
+Port-forward to try it locally:
+  kubectl -n {{ .Values.namespace }} port-forward svc/hotel-logging-service 8080:{{ .Values.service.port }}
+  curl http://localhost:8080/healthz

@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Lint, test & build Node app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Build Docker images
+    runs-on: ubuntu-latest
+    needs: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build webserver image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.webserver
+          push: false
+          tags: hotel/hotel-logging-server:ci
+          load: true
+
+      - name: Build fluent-bit image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.fluent-bit
+          push: false
+          tags: hotel/fluent-custom-logger:ci
+          load: true
+
+      - name: Trivy scan - webserver image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: hotel/hotel-logging-server:ci
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: 0
+
+      - name: Trivy scan - fluent-bit image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: hotel/fluent-custom-logger:ci
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: 0
+
+  manifests:
+    name: Helm lint & manifest validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.4'
+
+      - name: helm lint
+        run: helm lint charts/logging-app
+
+      - name: helm template
+        run: helm template charts/logging-app --set splunk.token=dummy > /tmp/rendered.yaml
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -zxvf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      - name: Validate rendered Helm output
+        run: kubeconform -strict -summary /tmp/rendered.yaml
+
+      - name: Validate k8s-manifests
+        run: kubeconform -strict -summary k8s-manifests/*.yaml

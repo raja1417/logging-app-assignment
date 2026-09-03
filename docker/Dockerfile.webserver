@@ -1,7 +1,38 @@
-FROM httpd:latest
-WORKDIR /usr/local/apache2/htdocs/
-COPY src/index.html .
-RUN mkdir -p /usr/local/apache2/logs/
-RUN chmod -R 755 /usr/local/apache2/logs/
-EXPOSE 80
-CMD ["httpd", "-D", "FOREGROUND"]
+# syntax=docker/dockerfile:1
+# Multi-stage build for the Node.js/TypeScript hotel-booking API.
+# Build context is the repository root (see docker-compose.yaml / CI workflows).
+
+FROM node:20.16.0-bookworm-slim AS build
+WORKDIR /build
+COPY app/package.json app/package-lock.json ./
+RUN npm ci
+COPY app/tsconfig.json ./
+COPY app/src ./src
+RUN npm run build
+
+FROM node:20.16.0-bookworm-slim AS runtime
+ENV NODE_ENV=production \
+    PORT=8080
+WORKDIR /app
+
+# Install only production dependencies.
+COPY app/package.json app/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=build /build/dist ./dist
+COPY app/public ./public
+
+# Apache-compatible log directory retained for parity with the original
+# design (Fluent Bit can be pointed at either this file or stdout).
+RUN mkdir -p /var/log/app && \
+    addgroup --system --gid 1001 nodeapp && \
+    adduser --system --uid 1001 --gid 1001 --home /home/nodeapp nodeapp && \
+    chown -R nodeapp:nodeapp /app /var/log/app
+
+USER nodeapp
+EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||8080)+'/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+
+CMD ["node", "dist/server.js"]

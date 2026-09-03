@@ -1,0 +1,74 @@
+replicaCount: 3
+
+namespace: hotel
+
+image:
+  repository: docker.io/hotel/hotel-logging-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+fluentBit:
+  image:
+    repository: docker.io/hotel/fluent-custom-logger
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  throttle:
+    rate: 1000
+    window: 5
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  host: hotel-booking.example.com
+
+app:
+  port: 8080
+  logLevel: info
+  logSampleRate: "0.5"
+  logMaxPerWindow: "50"
+  logWindowMs: "1000"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+splunk:
+  hecHost: splunk-service.svc.cluster.local
+  hecPort: "8088"
+  hecTls: "On"
+  # Base64-encoded HEC token. Override via --set-string splunk.token=... or
+  # a values file that is NOT committed to source control.
+  token: ""
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+
+serviceAccount:
+  create: true
+  name: ""
